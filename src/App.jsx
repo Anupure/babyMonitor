@@ -1,8 +1,9 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import Peer from 'peerjs';
-import { Camera, MonitorSmartphone, PhoneOff, Baby, Send } from 'lucide-react';
+import { Camera, MonitorSmartphone, PhoneOff, Baby, Send, LogOut, Plus, Trash2, ArrowLeft } from 'lucide-react';
 import { database, ensureAuthenticated } from './firebase';
-import { ref, set, onValue, onDisconnect, push, remove } from 'firebase/database';
+import { ref, set, get, update, onValue, onDisconnect, push, remove } from 'firebase/database';
+import { useAuth } from './AuthContext';
 import './index.css';
 
 const generateRoomCode = () => Math.random().toString(36).substring(2, 6).toUpperCase();
@@ -103,19 +104,45 @@ const ChatPanel = ({ messages, onSend }) => {
 
 // ─── Main App ───────────────────────────────────────────────
 export default function App() {
-  const [mode, setMode] = useState(null);
+  const { user, loading, isSignedIn, signIn, emailSignIn, signOut } = useAuth();
+
+  const [mode, setMode] = useState(null); // null | 'create' | 'camera' | 'monitor'
   const [userName, setUserName] = useState('');
+  const [devEmail, setDevEmail] = useState('');
+  const [devPassword, setDevPassword] = useState('');
   const [inputCode, setInputCode] = useState('');
   const [roomCode, setRoomCode] = useState('');
   const [status, setStatus] = useState('idle');
   const [errorMsg, setErrorMsg] = useState('');
+  const [newRoomName, setNewRoomName] = useState('');
+  const [roomDisplayName, setRoomDisplayName] = useState('Baby Camera');
 
   const [peers, setPeers] = useState({});
   const [chatMessages, setChatMessages] = useState([]);
+  const [savedRooms, setSavedRooms] = useState([]);
 
   const [localStream, setLocalStream] = useState(null);
   const [micOn, setMicOn] = useState(false);
   const [camOn, setCamOn] = useState(false);
+
+  // Load saved rooms when signed in
+  useEffect(() => {
+    if (!isSignedIn || !user) return;
+    setUserName(user.displayName || '');
+    const roomsRef = ref(database, `users/${user.uid}/rooms`);
+    const unsub = onValue(roomsRef, (snap) => {
+      if (!snap.exists()) { setSavedRooms([]); return; }
+      const rooms = [];
+      console.log('[Rooms] raw data:', JSON.stringify(snap.val()));
+      snap.forEach(child => {
+        console.log('[Rooms] child:', child.key, JSON.stringify(child.val()));
+        rooms.push({ code: child.key, ...child.val() });
+      });
+      console.log('[Rooms] parsed rooms array:', JSON.stringify(rooms));
+      setSavedRooms(rooms);
+    });
+    return () => unsub();
+  }, [isSignedIn, user]);
 
   // PeerJS refs
   const peerRef = useRef(null);
@@ -322,8 +349,10 @@ export default function App() {
   }, [setupDataConn, handleIncomingCall, startHeartbeat]);
 
   // ── Camera mode ────────────────────────────────────────────
-  const startCameraMode = async () => {
-    myNameRef.current = 'Baby Camera';
+  const startCameraMode = async (existingCode, roomName) => {
+    const displayName = roomName || 'Baby Camera';
+    myNameRef.current = displayName;
+    setRoomDisplayName(displayName);
     isHostRef.current = true;
     setMode('camera');
     setStatus('connecting');
@@ -335,14 +364,25 @@ export default function App() {
       localStreamRef.current = stream;
       setLocalStream(stream);
       setMicOn(true); setCamOn(true);
-      const code = generateRoomCode();
+      const code = existingCode || generateRoomCode();
       setRoomCode(code);
       initPeer(`${PEER_PREFIX}${code}`);
-      await initFirebase(code, 'Baby Camera', true);
+      await initFirebase(code, displayName, true);
+      // Save room — use update() to merge, not overwrite sibling rooms
+      if (isSignedIn && user) {
+        await update(ref(database, `users/${user.uid}/rooms`), {
+          [code]: { name: displayName, createdAt: Date.now() }
+        });
+      }
     } catch (err) {
       setErrorMsg('Could not access camera/mic. Please grant permissions.');
       setStatus('error');
     }
+  };
+
+  const deleteRoom = async (code) => {
+    if (!isSignedIn || !user) return;
+    await remove(ref(database, `users/${user.uid}/rooms/${code}`)).catch(() => {});
   };
 
   // ── Monitor mode ───────────────────────────────────────────
@@ -432,36 +472,134 @@ export default function App() {
     await cleanupFirebase();
     setLocalStream(null); setPeers({}); setChatMessages([]);
     setStatus('idle'); setErrorMsg(''); setRoomCode(''); setInputCode('');
-    setMicOn(false); setCamOn(false); setMode(null);
+    setMicOn(false); setCamOn(false); setMode(null); setNewRoomName(''); setRoomDisplayName('Baby Camera');
   };
 
   useEffect(() => () => { stopEverything(); }, []);
 
   // ─── RENDER ─────────────────────────────────────────────────
 
+  if (loading) {
+    return <div className="card"><p className="muted-text">Loading...</p></div>;
+  }
+
   const allPeerList = Object.entries(peers);
 
+  // Create room screen — enter camera name
+  if (mode === 'create') {
+    return (
+      <div className="card" style={{ maxWidth: '400px' }}>
+        <Camera className="icon-large" />
+        <h1>New Baby Camera</h1>
+        <p className="muted-text">Give your camera a name</p>
+        <input
+          type="text" placeholder="e.g. Bedroom, Kids Room"
+          value={newRoomName} onChange={e => setNewRoomName(e.target.value)}
+          style={{ textTransform: 'none', letterSpacing: 'normal', marginTop: '1rem' }}
+          autoFocus
+        />
+        {errorMsg && <p style={{ color: 'var(--error-color)' }}>{errorMsg}</p>}
+        <div className="flex-row" style={{ marginTop: '1rem' }}>
+          <button className="btn-secondary" onClick={() => { setMode(null); setErrorMsg(''); setNewRoomName(''); }}>
+            <ArrowLeft size={16} /> Back
+          </button>
+          <button className="btn-primary" onClick={() => {
+            const name = newRoomName.trim();
+            if (!name) { setErrorMsg('Please enter a camera name.'); return; }
+            setErrorMsg('');
+            startCameraMode(null, name);
+          }}>
+            <Camera size={16} color="white" /> Start Camera
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  // Landing page
   if (!mode) {
     return (
       <div className="card">
         <Baby className="icon-large" />
         <h1>Baby Monitor</h1>
         <p className="muted-text">Secure, peer-to-peer baby monitoring.</p>
-        <div className="flex-col" style={{ marginTop: '2rem' }}>
-          <button className="btn-primary" onClick={startCameraMode}>
-            <Camera size={20} color="white" /> Use as Camera (Baby)
-          </button>
-          <hr style={{ width: '100%', borderColor: 'var(--surface-hover)', margin: '1.25rem 0' }} />
-          <input
-            type="text" placeholder="Your Name (e.g. Mom)"
-            value={userName} onChange={e => setUserName(e.target.value)}
-            style={{ textTransform: 'none', letterSpacing: 'normal' }}
-          />
-          <button className="btn-secondary" onClick={goToMonitor}>
-            <MonitorSmartphone size={20} color="#94a3b8" /> Use as Monitor (Parent)
-          </button>
-          {errorMsg && <p style={{ color: 'var(--error-color)', marginTop: '0.5rem' }}>{errorMsg}</p>}
-        </div>
+
+        {isSignedIn ? (
+          <div className="flex-col" style={{ marginTop: '2rem' }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%', marginBottom: '0.5rem' }}>
+              <span className="muted-text" style={{ fontSize: '0.85rem' }}>👋 {user.displayName}</span>
+              <button onClick={signOut} className="icon-btn" title="Sign Out" style={{ padding: '0.4rem' }}>
+                <LogOut size={16} color="#94a3b8" />
+              </button>
+            </div>
+
+            <button className="btn-primary" onClick={() => setMode('create')}>
+              <Plus size={20} color="white" /> New Baby Camera
+            </button>
+
+            {savedRooms.length > 0 && (
+              <>
+                <p className="muted-text" style={{ marginTop: '1rem', fontSize: '0.8rem' }}>Your Saved Rooms</p>
+                {savedRooms.map(r => (
+                  <div key={r.code} style={{ display: 'flex', gap: '0.5rem', width: '100%' }}>
+                    <button className="btn-secondary" onClick={() => startCameraMode(r.code, r.name)} style={{ flex: 1, justifyContent: 'space-between' }}>
+                      <span>📷 {r.name || 'Baby Camera'}</span>
+                      <span style={{ fontFamily: 'monospace', fontSize: '0.85rem', opacity: 0.6 }}>{r.code}</span>
+                    </button>
+                    <button className="icon-btn" onClick={(e) => { e.stopPropagation(); deleteRoom(r.code); }} title="Delete room" style={{ padding: '0.5rem', flexShrink: 0 }}>
+                      <Trash2 size={14} color="#ef4444" />
+                    </button>
+                  </div>
+                ))}
+              </>
+            )}
+
+            <hr style={{ width: '100%', borderColor: 'var(--surface-hover)', margin: '1.25rem 0' }} />
+            <button className="btn-secondary" onClick={goToMonitor}>
+              <MonitorSmartphone size={20} color="#94a3b8" /> Join as Monitor (Parent)
+            </button>
+            {errorMsg && <p style={{ color: 'var(--error-color)', marginTop: '0.5rem' }}>{errorMsg}</p>}
+          </div>
+        ) : (
+          <div className="flex-col" style={{ marginTop: '2rem' }}>
+            <button className="btn-google" onClick={signIn}>
+              <svg width="20" height="20" viewBox="0 0 48 48"><path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/><path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/><path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"/><path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/></svg>
+              Sign in with Google
+            </button>
+            <p className="muted-text" style={{ fontSize: '0.75rem', marginTop: '0.5rem' }}>Sign in to create baby cameras & save rooms</p>
+
+            <hr style={{ width: '100%', borderColor: 'var(--surface-hover)', margin: '1.25rem 0' }} />
+            <p className="muted-text" style={{ fontSize: '0.85rem' }}>Or join as a guest parent</p>
+            <input
+              type="text" placeholder="Your Name (e.g. Mom)"
+              value={userName} onChange={e => setUserName(e.target.value)}
+              style={{ textTransform: 'none', letterSpacing: 'normal' }}
+            />
+            <button className="btn-secondary" onClick={goToMonitor}>
+              <MonitorSmartphone size={20} color="#94a3b8" /> Join Room as Guest
+            </button>
+            {errorMsg && <p style={{ color: 'var(--error-color)', marginTop: '0.5rem' }}>{errorMsg}</p>}
+
+            <hr style={{ width: '100%', borderColor: 'var(--surface-hover)', margin: '1.25rem 0' }} />
+            <details style={{ width: '100%', textAlign: 'left' }}>
+              <summary className="muted-text" style={{ cursor: 'pointer', fontSize: '0.75rem', textAlign: 'center' }}>Dev / Email Login</summary>
+              <div className="flex-col" style={{ marginTop: '0.5rem' }}>
+                <input type="email" placeholder="Email" value={devEmail} onChange={e => setDevEmail(e.target.value)}
+                  style={{ textTransform: 'none', letterSpacing: 'normal', fontSize: '0.9rem', padding: '0.7rem' }} />
+                <input type="password" placeholder="Password" value={devPassword} onChange={e => setDevPassword(e.target.value)}
+                  style={{ textTransform: 'none', letterSpacing: 'normal', fontSize: '0.9rem', padding: '0.7rem' }} />
+                <button className="btn-secondary" onClick={async () => {
+                  try {
+                    setErrorMsg('');
+                    await emailSignIn(devEmail, devPassword);
+                  } catch (e) {
+                    setErrorMsg(e.message || 'Login failed');
+                  }
+                }} style={{ fontSize: '0.85rem', padding: '0.6rem' }}>Sign In / Sign Up</button>
+              </div>
+            </details>
+          </div>
+        )}
       </div>
     );
   }
@@ -512,7 +650,7 @@ export default function App() {
         <div className="main-content">
           <div className="video-section">
             <div className="primary-video">
-              {localStream && <VideoPlayer stream={localStream} isLocal label="👶 Baby Camera" initiallyMuted />}
+              {localStream && <VideoPlayer stream={localStream} isLocal label={`👶 ${roomDisplayName}`} initiallyMuted />}
             </div>
             {parentPeers.length > 0 && (
               <div className="secondary-videos">
@@ -556,7 +694,7 @@ export default function App() {
         <div className="video-section">
           <div className="primary-video">
             {hostPeerEntry ? (
-              <VideoPlayer stream={hostPeerEntry[1].stream} label="👶 Baby Camera" initiallyMuted={false} />
+              <VideoPlayer stream={hostPeerEntry[1].stream} label={`👶 ${hostPeerEntry[1].name || 'Baby Camera'}`} initiallyMuted={false} />
             ) : (
               <div className="video-container" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '250px' }}>
                 <p className="muted-text">Waiting for baby's video...</p>
