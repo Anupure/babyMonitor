@@ -116,6 +116,8 @@ export default function App() {
   const [errorMsg, setErrorMsg] = useState('');
   const [newRoomName, setNewRoomName] = useState('');
   const [roomDisplayName, setRoomDisplayName] = useState('Baby Camera');
+  const [reconnectAttempt, setReconnectAttempt] = useState(0);
+  const MAX_RECONNECT = 5;
 
   const [peers, setPeers] = useState({});
   const [chatMessages, setChatMessages] = useState([]);
@@ -154,6 +156,8 @@ export default function App() {
   const peerNames = useRef({});
   const peerLastSeen = useRef({});
   const heartbeatInterval = useRef(null);
+  const reconnectTimer = useRef(null);
+  const peerIdRef = useRef(null);  // store peer ID for reconnect
 
   // Firebase refs
   const myFbUidRef = useRef(null);
@@ -335,18 +339,86 @@ export default function App() {
   }, [setupDataConn, callPeer]);
 
   const initPeer = useCallback((id) => {
-    const p = new Peer(id, { debug: 2 });
+    if (id) peerIdRef.current = id;
+    const peerId = id || peerIdRef.current;
+
+    // Destroy old peer if exists
+    if (peerRef.current) {
+      try { peerRef.current.destroy(); } catch (_) {}
+      peerRef.current = null;
+    }
+
+    const p = peerId ? new Peer(peerId, { debug: 2 }) : new Peer({ debug: 2 });
     p.on('open', (myId) => {
       console.log('[Peer] open', myId);
+      setReconnectAttempt(0); // reset on success
       if (isHostRef.current) { setStatus('waiting'); startHeartbeat(); }
       else setStatus('connected');
     });
-    p.on('error', (err) => { setErrorMsg(err.message || 'Connection error'); setStatus('error'); });
+    p.on('disconnected', () => {
+      console.log('[Peer] disconnected — attempting reconnect');
+      attemptReconnect();
+    });
+    p.on('error', (err) => {
+      console.error('[Peer] error:', err.type, err.message);
+      const recoverable = ['disconnected', 'network', 'server-error', 'socket-error', 'socket-closed'];
+      if (recoverable.includes(err.type)) {
+        attemptReconnect();
+      } else if (err.type === 'unavailable-id') {
+        // Peer ID already taken (stale session) — wait and retry
+        attemptReconnect(3000);
+      } else {
+        setErrorMsg(err.message || 'Connection error');
+        setStatus('error');
+      }
+    });
     p.on('connection', (conn) => setupDataConn(conn));
     p.on('call', (call) => handleIncomingCall(call));
     peerRef.current = p;
     return p;
   }, [setupDataConn, handleIncomingCall, startHeartbeat]);
+
+  const attemptReconnect = useCallback((delayOverride) => {
+    setReconnectAttempt(prev => {
+      const attempt = prev + 1;
+      if (attempt > MAX_RECONNECT) {
+        setStatus('disconnected');
+        setErrorMsg('Connection lost. Tap Retry to reconnect.');
+        return prev;
+      }
+      setStatus('reconnecting');
+      const delay = delayOverride || Math.min(1000 * Math.pow(2, attempt - 1), 10000);
+      console.log(`[Reconnect] attempt ${attempt}/${MAX_RECONNECT} in ${delay}ms`);
+      if (reconnectTimer.current) clearTimeout(reconnectTimer.current);
+      reconnectTimer.current = setTimeout(() => {
+        // Clean up old connections
+        dataConns.current = {};
+        mediaCalls.current = {};
+        peerNames.current = {};
+        peerLastSeen.current = {};
+        setPeers({});
+        initPeer(); // re-init with stored peerIdRef
+        // If monitor, re-connect to host after peer opens
+        if (!isHostRef.current && roomCode) {
+          const waitForOpen = () => {
+            if (peerRef.current?.open) {
+              connectToPeer(`${PEER_PREFIX}${roomCode}`);
+            } else {
+              setTimeout(waitForOpen, 500);
+            }
+          };
+          waitForOpen();
+        }
+      }, delay);
+      return attempt;
+    });
+  }, [initPeer, connectToPeer, roomCode]);
+
+  const manualRetry = useCallback(() => {
+    setReconnectAttempt(0);
+    setErrorMsg('');
+    attemptReconnect(500);
+  }, [attemptReconnect]);
 
   // ── Camera mode ────────────────────────────────────────────
   const startCameraMode = async (existingCode, roomName) => {
@@ -464,15 +536,17 @@ export default function App() {
 
   // ── Cleanup ────────────────────────────────────────────────
   const stopEverything = async () => {
+    if (reconnectTimer.current) { clearTimeout(reconnectTimer.current); reconnectTimer.current = null; }
     if (heartbeatInterval.current) { clearInterval(heartbeatInterval.current); heartbeatInterval.current = null; }
     localStreamRef.current?.getTracks().forEach(t => t.stop());
     peerRef.current?.destroy(); peerRef.current = null;
     dataConns.current = {}; mediaCalls.current = {};
     localStreamRef.current = null; peerNames.current = {}; peerLastSeen.current = {};
+    peerIdRef.current = null;
     await cleanupFirebase();
     setLocalStream(null); setPeers({}); setChatMessages([]);
     setStatus('idle'); setErrorMsg(''); setRoomCode(''); setInputCode('');
-    setMicOn(false); setCamOn(false); setMode(null); setNewRoomName(''); setRoomDisplayName('Baby Camera');
+    setMicOn(false); setCamOn(false); setMode(null); setNewRoomName(''); setRoomDisplayName('Baby Camera'); setReconnectAttempt(0);
   };
 
   useEffect(() => () => { stopEverything(); }, []);
@@ -634,14 +708,19 @@ export default function App() {
       <div className="card app-container">
         <div className="header-bar">
           <div className="badge">
-            <div className="pulsing-dot" style={{ backgroundColor: allPeerList.length > 0 ? '#22c55e' : '#ef4444' }} />
-            {allPeerList.length} Parent(s) Connected
+            <div className="pulsing-dot" style={{ backgroundColor: status === 'reconnecting' ? '#f59e0b' : status === 'disconnected' ? '#ef4444' : allPeerList.length > 0 ? '#22c55e' : '#ef4444' }} />
+            {status === 'reconnecting' ? `Reconnecting (${reconnectAttempt}/${MAX_RECONNECT})...` :
+             status === 'disconnected' ? 'Disconnected' :
+             `${allPeerList.length} Parent(s) Connected`}
           </div>
-          {status === 'waiting' && (
+          {(status === 'waiting' || status === 'reconnecting') && (
             <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
               <span className="muted-text" style={{ fontSize: '0.85rem' }}>Code:</span>
               <div className="room-code" style={{ fontSize: '1.2rem', padding: '0.3rem 0.8rem' }}>{roomCode}</div>
             </div>
+          )}
+          {status === 'disconnected' && (
+            <button className="btn-primary" onClick={manualRetry} style={{ padding: '0.4rem 1rem', fontSize: '0.85rem' }}>Retry</button>
           )}
           <button className="btn-danger" onClick={stopEverything} style={{ padding: '0.5rem 1rem' }}>
             <PhoneOff size={16} color="white" /> Stop
@@ -675,9 +754,14 @@ export default function App() {
     <div className="card app-container">
       <div className="header-bar">
         <div className="badge">
-          <div className="pulsing-dot" style={{ backgroundColor: hostPeerEntry ? '#22c55e' : '#f59e0b' }} />
-          {hostPeerEntry ? 'Baby Connected' : 'Waiting for Baby...'}
+          <div className="pulsing-dot" style={{ backgroundColor: status === 'reconnecting' ? '#f59e0b' : status === 'disconnected' ? '#ef4444' : hostPeerEntry ? '#22c55e' : '#f59e0b' }} />
+          {status === 'reconnecting' ? `Reconnecting (${reconnectAttempt}/${MAX_RECONNECT})...` :
+           status === 'disconnected' ? 'Disconnected' :
+           hostPeerEntry ? 'Baby Connected' : 'Waiting for Baby...'}
         </div>
+        {status === 'disconnected' && (
+          <button className="btn-primary" onClick={manualRetry} style={{ padding: '0.4rem 1rem', fontSize: '0.85rem' }}>Retry</button>
+        )}
         <div className="media-toggles">
           <button className={`icon-btn ${micOn ? 'active' : ''}`} title={micOn ? 'Mute Mic' : 'Unmute Mic'} onClick={toggleMic}>
             <span style={{fontSize: '18px', lineHeight: 1}}>{micOn ? '🎙️' : '🔇'}</span>
