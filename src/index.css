@@ -193,6 +193,25 @@ video {
   }
 }
 
+.cry-alert {
+  animation: pulse-red 1s infinite alternate;
+  border: 3px solid var(--error-color) !important;
+  box-shadow: 0 0 20px rgba(239, 68, 68, 0.6) !important;
+}
+
+.night-vision-filter {
+  filter: brightness(2.5) contrast(1.2) grayscale(100%) sepia(100%) hue-rotate(80deg) saturate(300%);
+}
+
+@keyframes pulse-red {
+  from {
+    box-shadow: 0 0 10px rgba(239, 68, 68, 0.4);
+  }
+  to {
+    box-shadow: 0 0 30px rgba(239, 68, 68, 0.8), inset 0 0 20px rgba(239, 68, 68, 0.3);
+  }
+}
+
 .room-code {
   font-size: 3rem;
   font-weight: 700;

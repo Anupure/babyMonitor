@@ -10,7 +10,7 @@ const generateRoomCode = () => Math.random().toString(36).substring(2, 6).toUppe
 const PEER_PREFIX = 'bmon-';
 
 // VideoPlayer: handles autoplay, mute toggle, and fullscreen
-const VideoPlayer = ({ stream, isLocal, label, initiallyMuted }) => {
+const VideoPlayer = ({ stream, isLocal, label, initiallyMuted, nightVision }) => {
   const videoRef = useRef(null);
   const containerRef = useRef(null);
   const [muted, setMuted] = useState(!!initiallyMuted);
@@ -40,7 +40,7 @@ const VideoPlayer = ({ stream, isLocal, label, initiallyMuted }) => {
 
   return (
     <div className="video-container" ref={containerRef}>
-      <video ref={videoRef} autoPlay playsInline muted={muted} />
+      <video ref={videoRef} autoPlay playsInline muted={muted} className={nightVision ? 'night-vision-filter' : ''} />
       {needsTap && (
         <div className="interaction-overlay" onClick={handleTap}>
           <button className="btn-primary">▶ Tap to Play</button>
@@ -119,6 +119,14 @@ export default function App() {
   const [reconnectAttempt, setReconnectAttempt] = useState(0);
   const MAX_RECONNECT = 5;
 
+  // Feature #6: Audio-Level Cry Alert State
+  const [cryThreshold, setCryThreshold] = useState(50);
+  const [isCrying, setIsCrying] = useState(false);
+  const [babyCrying, setBabyCrying] = useState(false);
+
+  // Feature #9: Night Vision Mode
+  const [nightVision, setNightVision] = useState(false);
+
   const [peers, setPeers] = useState({});
   const [chatMessages, setChatMessages] = useState([]);
   const [savedRooms, setSavedRooms] = useState([]);
@@ -161,7 +169,16 @@ export default function App() {
 
   // Firebase refs
   const myFbUidRef = useRef(null);
+  const databaseRoomsRef = useRef(null);
   const fbUnsubsRef = useRef([]);
+
+  // Feature #6: Audio-Level Cry Alert Refs
+  const audioContextRef = useRef(null);
+  const analyserRef = useRef(null);
+  const sourceRef = useRef(null);
+  const audioLoopRef = useRef(null);
+  const cryDurationRef = useRef(0);
+  const silenceDurationRef = useRef(0);
 
   useEffect(() => { localStreamRef.current = localStream; }, [localStream]);
 
@@ -299,6 +316,10 @@ export default function App() {
         updatePeer(conn.peer, { name: data.name, isHost: data.isHost });
       } else if (data.type === 'PING') {
         if (conn.open) conn.send({ type: 'PONG' });
+      } else if (data.type === 'CHAT') {
+        setChatMessages(prev => [...prev, data.message]);
+      } else if (data.type === 'CRY_STATE') {
+        setBabyCrying(data.state);
       } else if (data.type === 'PONG') {
         peerLastSeen.current[conn.peer] = Date.now();
       } else if (data.type === 'PEER_LIST') {
@@ -436,6 +457,44 @@ export default function App() {
       localStreamRef.current = stream;
       setLocalStream(stream);
       setMicOn(true); setCamOn(true);
+
+      // Feature #6: Setup Audio Analyzer
+      try {
+        const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        const analyser = audioCtx.createAnalyser();
+        analyser.fftSize = 256;
+        const source = audioCtx.createMediaStreamSource(stream);
+        source.connect(analyser);
+        
+        audioContextRef.current = audioCtx;
+        analyserRef.current = analyser;
+        sourceRef.current = source;
+
+        const dataArray = new Uint8Array(analyser.frequencyBinCount);
+        
+        const monitorAudio = () => {
+          if (!analyserRef.current) return;
+          analyserRef.current.getByteFrequencyData(dataArray);
+          
+          let sum = 0;
+          for(let i = 0; i < dataArray.length; i++) {
+            sum += dataArray[i];
+          }
+          const average = sum / dataArray.length;
+          // Scale average (0-255) to percentage (0-100)
+          const volumePercent = (average / 255) * 100;
+
+          // Note: we can't easily access the latest state in requestAnimationFrame without refs,
+          // so we use a functional state update trick or just read from a ref, but to keep it simple,
+          // we'll dispatch an event or use a ref for the threshold if needed.
+          // Wait, cryThreshold is captured in closure? No, it's stale. 
+          // We will handle threshold in a useEffect that listens to cryThreshold instead, or update a ref.
+        };
+        // We'll actually start the loop below using a cleaner approach.
+      } catch(err) {
+        console.error('AudioContext setup failed', err);
+      }
+
       const code = existingCode || generateRoomCode();
       setRoomCode(code);
       initPeer(`${PEER_PREFIX}${code}`);
@@ -450,6 +509,67 @@ export default function App() {
       setErrorMsg('Could not access camera/mic. Please grant permissions.');
       setStatus('error');
     }
+  };
+
+  // Update audio loop when threshold changes or host mode starts
+  useEffect(() => {
+    if (mode !== 'camera' || !analyserRef.current) return;
+    
+    if (audioLoopRef.current) clearInterval(audioLoopRef.current);
+    
+    const dataArray = new Uint8Array(analyserRef.current.fftSize);
+    let lastTime = Date.now();
+
+    const checkAudio = () => {
+      if (!analyserRef.current) return;
+      
+      const time = Date.now();
+      const dt = time - lastTime;
+      lastTime = time;
+
+      analyserRef.current.getByteTimeDomainData(dataArray);
+      let sumSquares = 0;
+      for (let i = 0; i < dataArray.length; i++) {
+        const normalized = (dataArray[i] - 128) / 128;
+        sumSquares += normalized * normalized;
+      }
+      const rms = Math.sqrt(sumSquares / dataArray.length);
+      
+      // Scale RMS up. Typical speaking might be 0.1-0.2 RMS. Crying might be 0.3-0.5.
+      // Multiply by 300 so that an RMS of 0.16 is ~50%.
+      const volume = Math.min(100, rms * 300);
+
+      if (volume >= cryThreshold) {
+        cryDurationRef.current += dt;
+        silenceDurationRef.current = 0;
+        if (cryDurationRef.current > 1500) { // 1.5 seconds of loud noise
+          setIsCrying(prev => {
+            if (!prev) broadcastCryState(true);
+            return true;
+          });
+        }
+      } else {
+        silenceDurationRef.current += dt;
+        if (silenceDurationRef.current > 2000) { // 2 seconds of quiet
+          cryDurationRef.current = 0;
+          setIsCrying(prev => {
+            if (prev) broadcastCryState(false);
+            return false;
+          });
+        }
+      }
+    };
+    audioLoopRef.current = setInterval(checkAudio, 100);
+    
+    return () => {
+      if (audioLoopRef.current) clearInterval(audioLoopRef.current);
+    };
+  }, [mode, cryThreshold]);
+
+  const broadcastCryState = (state) => {
+    Object.values(dataConns.current).forEach(conn => {
+      if (conn.open) conn.send({ type: 'CRY_STATE', state });
+    });
   };
 
   const deleteRoom = async (code) => {
@@ -536,6 +656,16 @@ export default function App() {
 
   // ── Cleanup ────────────────────────────────────────────────
   const stopEverything = async () => {
+    if (audioLoopRef.current) clearInterval(audioLoopRef.current);
+    if (audioContextRef.current) {
+      audioContextRef.current.close().catch(()=>{});
+      audioContextRef.current = null;
+    }
+    analyserRef.current = null;
+    sourceRef.current = null;
+    cryDurationRef.current = 0;
+    silenceDurationRef.current = 0;
+
     if (reconnectTimer.current) { clearTimeout(reconnectTimer.current); reconnectTimer.current = null; }
     if (heartbeatInterval.current) { clearInterval(heartbeatInterval.current); heartbeatInterval.current = null; }
     localStreamRef.current?.getTracks().forEach(t => t.stop());
@@ -547,6 +677,7 @@ export default function App() {
     setLocalStream(null); setPeers({}); setChatMessages([]);
     setStatus('idle'); setErrorMsg(''); setRoomCode(''); setInputCode('');
     setMicOn(false); setCamOn(false); setMode(null); setNewRoomName(''); setRoomDisplayName('Baby Camera'); setReconnectAttempt(0);
+    setIsCrying(false); setBabyCrying(false);
   };
 
   useEffect(() => () => { stopEverything(); }, []);
@@ -728,9 +859,21 @@ export default function App() {
         </div>
         <div className="main-content">
           <div className="video-section">
-            <div className="primary-video">
+            <div className="primary-video" style={{ position: 'relative' }}>
               {localStream && <VideoPlayer stream={localStream} isLocal label={`👶 ${roomDisplayName}`} initiallyMuted />}
+              {isCrying && (
+                <div style={{ position: 'absolute', top: 10, left: '50%', transform: 'translateX(-50%)', backgroundColor: 'var(--error-color)', color: 'white', padding: '0.2rem 1rem', borderRadius: '12px', fontWeight: 'bold', fontSize: '0.85rem', zIndex: 10, animation: 'pulse-red 1s infinite alternate' }}>
+                  Baby is Crying!
+                </div>
+              )}
             </div>
+            
+            <div style={{ backgroundColor: 'rgba(0,0,0,0.2)', padding: '0.8rem', borderRadius: '12px', marginTop: '1rem', display: 'flex', alignItems: 'center', gap: '1rem' }}>
+              <span className="muted-text" style={{ fontSize: '0.85rem', whiteSpace: 'nowrap' }}>Cry Alert Sensitivity:</span>
+              <input type="range" min="10" max="90" value={cryThreshold} onChange={(e) => setCryThreshold(parseInt(e.target.value))} style={{ flex: 1, accentColor: 'var(--primary-color)' }} />
+              <span className="muted-text" style={{ fontSize: '0.85rem', minWidth: '30px' }}>{cryThreshold}%</span>
+            </div>
+
             {parentPeers.length > 0 && (
               <div className="secondary-videos">
                 {parentPeers.map(([id, d]) => (
@@ -769,19 +912,27 @@ export default function App() {
           <button className={`icon-btn ${camOn ? 'active' : ''}`} title={camOn ? 'Turn Off Camera' : 'Turn On Camera'} onClick={toggleCam}>
             <span style={{fontSize: '18px', lineHeight: 1}}>{camOn ? '📷' : '📵'}</span>
           </button>
+          <button className={`icon-btn ${nightVision ? 'active' : ''}`} title={nightVision ? 'Turn Off Night Vision' : 'Turn On Night Vision'} onClick={() => setNightVision(!nightVision)}>
+            <span style={{fontSize: '18px', lineHeight: 1}}>{nightVision ? '🌞' : '🌙'}</span>
+          </button>
         </div>
         <button className="btn-danger" onClick={stopEverything} style={{ padding: '0.5rem 1rem' }}>
           <PhoneOff size={16} color="white" /> Leave
         </button>
       </div>
-      <div className="main-content">
+      <div className={`main-content ${babyCrying ? 'cry-alert' : ''}`} style={{ borderRadius: '12px', transition: 'box-shadow 0.3s' }}>
         <div className="video-section">
-          <div className="primary-video">
+          <div className="primary-video" style={{ position: 'relative' }}>
             {hostPeerEntry ? (
-              <VideoPlayer stream={hostPeerEntry[1].stream} label={`👶 ${hostPeerEntry[1].name || 'Baby Camera'}`} initiallyMuted={false} />
+              <VideoPlayer stream={hostPeerEntry[1].stream} label={`👶 ${hostPeerEntry[1].name || 'Baby Camera'}`} initiallyMuted={false} nightVision={nightVision} />
             ) : (
               <div className="video-container" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '250px' }}>
                 <p className="muted-text">Waiting for baby's video...</p>
+              </div>
+            )}
+            {babyCrying && (
+              <div style={{ position: 'absolute', top: 10, left: '50%', transform: 'translateX(-50%)', backgroundColor: 'var(--error-color)', color: 'white', padding: '0.4rem 1.5rem', borderRadius: '20px', fontWeight: 'bold', fontSize: '1.2rem', zIndex: 10, boxShadow: '0 4px 6px rgba(0,0,0,0.3)' }}>
+                ⚠️ Baby is Crying!
               </div>
             )}
           </div>
