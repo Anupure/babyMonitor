@@ -81,6 +81,7 @@ export default function App() {
   // Firebase refs
   const myFbUidRef = useRef(null);
   const fbUnsubsRef = useRef([]);
+  const roomCodeRef = useRef('');
 
   // Feature #6: Audio-Level Cry Alert Refs
   const audioContextRef = useRef(null);
@@ -404,6 +405,7 @@ export default function App() {
       }
 
       const code = existingCode || generateRoomCode();
+      roomCodeRef.current = code;
       setRoomCode(code);
       initPeer(`${PEER_PREFIX}${code}`);
       await initFirebase(code, displayName, true);
@@ -486,13 +488,50 @@ export default function App() {
   };
 
   // ── Monitor mode ───────────────────────────────────────────
-  const goToMonitor = () => {
+  const goToMonitor = async () => {
     if (!userName.trim()) { setErrorMsg('Please enter your name.'); return; }
+    
+    // Feature 7: Mandatory Notifications
+    if ('Notification' in window) {
+      const permission = await Notification.requestPermission();
+      if (permission !== 'granted') {
+        setErrorMsg('You must allow notifications to use the Monitor mode.');
+        return;
+      }
+    } else {
+      setErrorMsg('Notifications are not supported by your browser, which are required for monitoring.');
+      return;
+    }
+    
     setErrorMsg('');
     myNameRef.current = userName.trim();
     isHostRef.current = false;
     setMode('monitor');
   };
+
+  useEffect(() => {
+    if (babyCrying && mode === 'monitor') {
+      if ('Notification' in window && Notification.permission === 'granted') {
+        try {
+          if ('serviceWorker' in navigator && navigator.serviceWorker.ready) {
+            navigator.serviceWorker.ready.then(reg => {
+              reg.showNotification('⚠️ Baby is Crying!', {
+                body: `Loud noise detected in ${roomDisplayName || 'the baby room'}!`,
+                icon: '/pwa-192x192.png',
+                requireInteraction: true
+              }).catch(() => {
+                new Notification('⚠️ Baby is Crying!', { body: 'Loud noise detected!' });
+              });
+            });
+          } else {
+            new Notification('⚠️ Baby is Crying!', { body: 'Loud noise detected!' });
+          }
+        } catch (e) {
+          console.error('Notification failed', e);
+        }
+      }
+    }
+  }, [babyCrying, mode, roomDisplayName]);
 
   const connectToRoom = async () => {
     stopRequestedRef.current = false;
@@ -500,6 +539,7 @@ export default function App() {
     if (code.length < 4) { setErrorMsg('Enter a valid 4-character code.'); return; }
     setErrorMsg('');
     setStatus('connecting');
+    roomCodeRef.current = code;
     setRoomCode(code);
     await initFirebase(code, userName.trim(), false);
     initPeer();
