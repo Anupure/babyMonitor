@@ -121,7 +121,7 @@ export function useWebRTC() {
       dropPeer(conn.peer);
       const hostPeerId = `${PEER_PREFIX}${stateRef.current.roomCode}`;
       if (!stateRef.current.isHost && conn.peer === hostPeerId && !stateRef.current.stopRequested) {
-        attemptReconnect();
+        attemptReconnect(null, true);
       }
     });
     conn.on('error', (e) => console.error('[Data] error', e));
@@ -147,7 +147,7 @@ export function useWebRTC() {
     }, 5000);
   }, [dropPeer]);
 
-  const attemptReconnect = useCallback((delayOverride) => {
+  const attemptReconnect = useCallback((delayOverride, fullRecreate = true) => {
     if (stateRef.current.stopRequested) return;
     setReconnectAttempt(prev => {
       if (stateRef.current.stopRequested) return prev;
@@ -164,13 +164,14 @@ export function useWebRTC() {
       reconnectTimer.current = setTimeout(() => {
         if (stateRef.current.stopRequested) return;
         
-        dataConns.current = {};
-        mediaCalls.current = {};
-        peerNames.current = {};
-        peerLastSeen.current = {};
-        setPeers({});
-        
-        initPeerCore();
+        if (fullRecreate) {
+          dataConns.current = {};
+          mediaCalls.current = {};
+          peerNames.current = {};
+          peerLastSeen.current = {};
+          setPeers({});
+          initPeerCore();
+        }
         
         if (!stateRef.current.isHost && stateRef.current.roomCode) {
           const waitForOpen = () => {
@@ -178,7 +179,7 @@ export function useWebRTC() {
             if (peerRef.current?.open) {
               connectToPeer(`${PEER_PREFIX}${stateRef.current.roomCode}`);
             } else {
-              setTimeout(waitForOpen, 500);
+              if (fullRecreate) setTimeout(waitForOpen, 500);
             }
           };
           waitForOpen();
@@ -209,15 +210,33 @@ export function useWebRTC() {
     
     p.on('disconnected', () => {
       if (stateRef.current.stopRequested || peerRef.current !== p) return;
-      attemptReconnect();
+      console.log('[Peer] disconnected from server. Reconnecting...');
+      if (!p.destroyed) {
+        p.reconnect();
+      }
     });
     
     p.on('error', (err) => {
       if (stateRef.current.stopRequested || peerRef.current !== p) return;
-      const recoverable = ['disconnected', 'network', 'peer-unavailable', 'server-error', 'socket-error', 'socket-closed'];
-      if (recoverable.includes(err.type)) {
-        attemptReconnect();
-      } else if (err.type === 'unavailable-id') {
+      console.error('[Peer] error:', err.type, err.message);
+      
+      if (err.type === 'peer-unavailable') {
+        // Just log it. Do NOT tear down the entire peer!
+        console.warn('A target peer was unavailable:', err.message);
+        // If we are the parent and we haven't connected to the host yet, we should retry.
+        if (!stateRef.current.isHost) {
+           attemptReconnect(null, true);
+        }
+        return;
+      }
+      
+      if (['disconnected', 'network', 'server-error', 'socket-error', 'socket-closed'].includes(err.type)) {
+        console.log('[Peer] recoverable server error, attempting reconnect to signaling...');
+        if (!p.destroyed) p.reconnect();
+        return;
+      } 
+      
+      if (err.type === 'unavailable-id') {
         attemptReconnect(3000);
       } else {
         setErrorMsg(err.message || 'Connection error');
