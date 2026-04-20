@@ -419,9 +419,19 @@ video {
   margin-bottom: 0.25rem;
 }
 
+.chat-time {
+  font-size: 0.7em;
+  opacity: 0.6;
+}
+
 .chat-text {
   font-size: 0.95rem;
   word-wrap: break-word;
+}
+
+.chat-empty {
+  text-align: center;
+  padding-top: 1rem;
 }
 
 .chat-input-form {
@@ -430,6 +440,17 @@ video {
   padding: 1rem;
   background-color: var(--bg-color);
   border-top: 1px solid var(--surface-hover);
+}
+
+.chat-input {
+  margin-bottom: 0;
+  text-transform: none;
+  letter-spacing: normal;
+}
+
+.chat-send-button {
+  padding: 0.75rem 1rem;
+  flex-shrink: 0;
 }
 
 .interaction-overlay {
