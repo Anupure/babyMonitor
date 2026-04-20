@@ -171,6 +171,7 @@ export default function App() {
   const myFbUidRef = useRef(null);
   const databaseRoomsRef = useRef(null);
   const fbUnsubsRef = useRef([]);
+  const roomCodeRef = useRef('');
 
   // Feature #6: Audio-Level Cry Alert Refs
   const audioContextRef = useRef(null);
@@ -328,7 +329,17 @@ export default function App() {
         });
       }
     });
-    conn.on('close', () => dropPeer(conn.peer));
+    conn.on('close', () => {
+      dropPeer(conn.peer);
+      if (!isHostRef.current && roomCodeRef.current && conn.peer === `${PEER_PREFIX}${roomCodeRef.current}`) {
+        console.log('[Monitor] Host dropped. Attempting to reconnect...');
+        setTimeout(() => {
+          if (peerRef.current && peerRef.current.open && !dataConns.current[`${PEER_PREFIX}${roomCodeRef.current}`]) {
+            connectToPeer(`${PEER_PREFIX}${roomCodeRef.current}`);
+          }
+        }, 5000);
+      }
+    });
     conn.on('error', (e) => console.error('[Data] error', e));
     if (isHostRef.current) {
       conn.on('open', () => { peerLastSeen.current[conn.peer] = Date.now(); });
@@ -496,6 +507,7 @@ export default function App() {
       }
 
       const code = existingCode || generateRoomCode();
+      roomCodeRef.current = code;
       setRoomCode(code);
       initPeer(`${PEER_PREFIX}${code}`);
       await initFirebase(code, displayName, true);
@@ -602,11 +614,23 @@ export default function App() {
   useEffect(() => {
     if (babyCrying && mode === 'monitor') {
       if ('Notification' in window && Notification.permission === 'granted') {
-        new Notification('⚠️ Baby is Crying!', {
-          body: `Loud noise detected in ${roomDisplayName || 'the baby room'}!`,
-          icon: '/pwa-192x192.png',
-          requireInteraction: true
-        });
+        try {
+          if ('serviceWorker' in navigator && navigator.serviceWorker.ready) {
+            navigator.serviceWorker.ready.then(reg => {
+              reg.showNotification('⚠️ Baby is Crying!', {
+                body: `Loud noise detected in ${roomDisplayName || 'the baby room'}!`,
+                icon: '/pwa-192x192.png',
+                requireInteraction: true
+              }).catch(() => {
+                new Notification('⚠️ Baby is Crying!', { body: 'Loud noise detected!' });
+              });
+            });
+          } else {
+            new Notification('⚠️ Baby is Crying!', { body: 'Loud noise detected!' });
+          }
+        } catch (e) {
+          console.error('Notification failed', e);
+        }
       }
     }
   }, [babyCrying, mode, roomDisplayName]);
@@ -616,6 +640,7 @@ export default function App() {
     if (code.length < 4) { setErrorMsg('Enter a valid 4-character code.'); return; }
     setErrorMsg('');
     setStatus('connecting');
+    roomCodeRef.current = code;
     setRoomCode(code);
     await initFirebase(code, userName.trim(), false);
     initPeer();
