@@ -1,108 +1,17 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import Peer from 'peerjs';
-import { Camera, MonitorSmartphone, PhoneOff, Baby, Send, LogOut, Plus, Trash2, ArrowLeft } from 'lucide-react';
+import { Camera, MonitorSmartphone, PhoneOff, Baby, LogOut, Plus, Trash2, ArrowLeft } from 'lucide-react';
 import { database, ensureAuthenticated } from './firebase';
-import { ref, set, get, update, onValue, onDisconnect, push, remove } from 'firebase/database';
-import { useAuth } from './AuthContext';
+import { ref, set, update, onValue, onDisconnect, push, remove } from 'firebase/database';
+import { useAuth } from './useAuth';
+import ChatPanel from './ChatPanel';
+import VideoPlayer from './VideoPlayer';
+import { peerOptions } from './webrtcConfig';
 import './index.css';
 
 const generateRoomCode = () => Math.random().toString(36).substring(2, 6).toUpperCase();
 const PEER_PREFIX = 'bmon-';
 
-// VideoPlayer: handles autoplay, mute toggle, and fullscreen
-const VideoPlayer = ({ stream, isLocal, label, initiallyMuted, nightVision }) => {
-  const videoRef = useRef(null);
-  const containerRef = useRef(null);
-  const [muted, setMuted] = useState(!!initiallyMuted);
-  const [needsTap, setNeedsTap] = useState(false);
-
-  useEffect(() => {
-    const video = videoRef.current;
-    if (!video || !stream) return;
-    if (video.srcObject === stream) return;
-    video.srcObject = stream;
-    video.play().catch(() => setNeedsTap(true));
-  }, [stream]);
-
-  const handleTap = () => {
-    setNeedsTap(false);
-    setMuted(false);
-    videoRef.current?.play().catch(console.error);
-  };
-
-  const toggleFullscreen = () => {
-    if (!document.fullscreenElement) {
-      containerRef.current?.requestFullscreen().catch(console.error);
-    } else {
-      document.exitFullscreen();
-    }
-  };
-
-  return (
-    <div className="video-container" ref={containerRef}>
-      <video ref={videoRef} autoPlay playsInline muted={muted} className={nightVision ? 'night-vision-filter' : ''} />
-      {needsTap && (
-        <div className="interaction-overlay" onClick={handleTap}>
-          <button className="btn-primary">▶ Tap to Play</button>
-        </div>
-      )}
-      <div className="video-controls">
-        <span className="video-name">{label}</span>
-        <div className="video-actions">
-          {!isLocal && (
-            <button className="icon-btn" onClick={() => setMuted(m => !m)}>
-              <span style={{fontSize:'15px',lineHeight:1}}>{muted ? '🔇' : '🔊'}</span>
-            </button>
-          )}
-          <button className="icon-btn" onClick={toggleFullscreen}>
-            <span style={{fontSize:'15px',lineHeight:1}}>⛶</span>
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-};
-
-// Chat Panel — messages from Firebase
-const ChatPanel = ({ messages, onSend }) => {
-  const [text, setText] = useState('');
-  const bottomRef = useRef(null);
-  useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages]);
-
-  const submit = (e) => {
-    e.preventDefault();
-    if (!text.trim()) return;
-    onSend(text.trim());
-    setText('');
-  };
-
-  return (
-    <div className="chat-container">
-      <div className="chat-messages">
-        {messages.length === 0 && <p className="muted-text" style={{ textAlign: 'center', paddingTop: '1rem' }}>No messages yet</p>}
-        {messages.map((m, i) => (
-          <div key={i} className={`chat-message ${m.mine ? 'chat-mine' : ''}`}>
-            <span className="chat-sender">{m.sender} <span style={{ fontSize: '0.7em', opacity: 0.6 }}>{m.time}</span></span>
-            <span className="chat-text">{m.text}</span>
-          </div>
-        ))}
-        <div ref={bottomRef} />
-      </div>
-      <form className="chat-input-form" onSubmit={submit}>
-        <input
-          type="text" value={text} onChange={e => setText(e.target.value)}
-          placeholder="Type a message..."
-          style={{ marginBottom: 0, textTransform: 'none', letterSpacing: 'normal' }}
-        />
-        <button type="submit" className="btn-primary" style={{ padding: '0.75rem 1rem', flexShrink: 0 }}>
-          <Send size={18} color="white" />
-        </button>
-      </form>
-    </div>
-  );
-};
-
-// ─── Main App ───────────────────────────────────────────────
 export default function App() {
   const { user, loading, isSignedIn, signIn, emailSignIn, signOut } = useAuth();
 
@@ -166,10 +75,11 @@ export default function App() {
   const heartbeatInterval = useRef(null);
   const reconnectTimer = useRef(null);
   const peerIdRef = useRef(null);  // store peer ID for reconnect
+  const roomCodeRef = useRef('');
+  const stopRequestedRef = useRef(false);
 
   // Firebase refs
   const myFbUidRef = useRef(null);
-  const databaseRoomsRef = useRef(null);
   const fbUnsubsRef = useRef([]);
 
   // Feature #6: Audio-Level Cry Alert Refs
@@ -181,6 +91,7 @@ export default function App() {
   const silenceDurationRef = useRef(0);
 
   useEffect(() => { localStreamRef.current = localStream; }, [localStream]);
+  useEffect(() => { roomCodeRef.current = roomCode; }, [roomCode]);
 
   const boostVideoBitrate = (call) => {
     if (!call?.peerConnection) return;
@@ -192,7 +103,9 @@ export default function App() {
         params.encodings[0].maxBitrate = 2_500_000;
         videoSender.setParameters(params).catch(() => {});
       }
-    } catch (_) {}
+    } catch {
+      // Some browsers do not support changing sender parameters after negotiation.
+    }
   };
 
   // ── Firebase Chat & Presence ───────────────────────────────
@@ -224,14 +137,7 @@ export default function App() {
       if (isHost) {
         const presenceRef = ref(database, `rooms/${code}/presence`);
         const unsubPresence = onValue(presenceRef, (snap) => {
-          if (!snap.exists()) return;
-          const active = snap.val();
-          // Drop PeerJS peers that are no longer in Firebase presence
-          Object.keys(dataConns.current).forEach(peerId => {
-            // peerId is bmon-XXXX, match against Firebase uid by name
-            // We can't directly map peerId to uid, but we can cross-check via peerNames
-            // This is used as a supplement to heartbeat, not a replacement
-          });
+          if (!snap.exists()) setPeers({});
         });
         fbUnsubsRef.current.push(unsubPresence);
       }
@@ -252,7 +158,7 @@ export default function App() {
   }, [roomCode]);
 
   const cleanupFirebase = useCallback(async () => {
-    fbUnsubsRef.current.forEach(fn => { try { fn(); } catch (_) {} });
+    fbUnsubsRef.current.forEach(fn => { try { fn(); } catch { /* subscription already closed */ } });
     fbUnsubsRef.current = [];
     if (myFbUidRef.current && roomCode) {
       await remove(ref(database, `rooms/${roomCode}/presence/${myFbUidRef.current}`)).catch(() => {});
@@ -328,11 +234,19 @@ export default function App() {
         });
       }
     });
-    conn.on('close', () => dropPeer(conn.peer));
+    conn.on('close', () => {
+      dropPeer(conn.peer);
+      const hostPeerId = `${PEER_PREFIX}${roomCodeRef.current}`;
+      if (!isHostRef.current && conn.peer === hostPeerId && !stopRequestedRef.current) {
+        attemptReconnect();
+      }
+    });
     conn.on('error', (e) => console.error('[Data] error', e));
     if (isHostRef.current) {
       conn.on('open', () => { peerLastSeen.current[conn.peer] = Date.now(); });
     }
+  // connectToPeer is part of the same PeerJS callback graph and is read at event time.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [callPeer]);
 
   const startHeartbeat = useCallback(() => {
@@ -342,7 +256,7 @@ export default function App() {
       const TIMEOUT_MS = 10000;
       Object.entries(dataConns.current).forEach(([peerId, conn]) => {
         if (!conn.open) { dropPeer(peerId); return; }
-        try { conn.send({ type: 'PING' }); } catch (_) {}
+        try { conn.send({ type: 'PING' }); } catch { /* connection closed between checks */ }
         const lastSeen = peerLastSeen.current[peerId];
         if (lastSeen && now - lastSeen > TIMEOUT_MS) {
           console.log('[Heartbeat] peer timed out:', peerId);
@@ -365,24 +279,27 @@ export default function App() {
 
     // Destroy old peer if exists
     if (peerRef.current) {
-      try { peerRef.current.destroy(); } catch (_) {}
+      try { peerRef.current.destroy(); } catch { /* peer already destroyed */ }
       peerRef.current = null;
     }
 
-    const p = peerId ? new Peer(peerId, { debug: 2 }) : new Peer({ debug: 2 });
+    const p = peerId ? new Peer(peerId, peerOptions) : new Peer(peerOptions);
     p.on('open', (myId) => {
+      if (stopRequestedRef.current || peerRef.current !== p) return;
       console.log('[Peer] open', myId);
       setReconnectAttempt(0); // reset on success
       if (isHostRef.current) { setStatus('waiting'); startHeartbeat(); }
       else setStatus('connected');
     });
     p.on('disconnected', () => {
+      if (stopRequestedRef.current || peerRef.current !== p) return;
       console.log('[Peer] disconnected — attempting reconnect');
       attemptReconnect();
     });
     p.on('error', (err) => {
+      if (stopRequestedRef.current || peerRef.current !== p) return;
       console.error('[Peer] error:', err.type, err.message);
-      const recoverable = ['disconnected', 'network', 'server-error', 'socket-error', 'socket-closed'];
+      const recoverable = ['disconnected', 'network', 'peer-unavailable', 'server-error', 'socket-error', 'socket-closed'];
       if (recoverable.includes(err.type)) {
         attemptReconnect();
       } else if (err.type === 'unavailable-id') {
@@ -397,10 +314,14 @@ export default function App() {
     p.on('call', (call) => handleIncomingCall(call));
     peerRef.current = p;
     return p;
+  // attemptReconnect is part of the same PeerJS callback graph and is read at event time.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [setupDataConn, handleIncomingCall, startHeartbeat]);
 
   const attemptReconnect = useCallback((delayOverride) => {
+    if (stopRequestedRef.current) return;
     setReconnectAttempt(prev => {
+      if (stopRequestedRef.current) return prev;
       const attempt = prev + 1;
       if (attempt > MAX_RECONNECT) {
         setStatus('disconnected');
@@ -412,6 +333,7 @@ export default function App() {
       console.log(`[Reconnect] attempt ${attempt}/${MAX_RECONNECT} in ${delay}ms`);
       if (reconnectTimer.current) clearTimeout(reconnectTimer.current);
       reconnectTimer.current = setTimeout(() => {
+        if (stopRequestedRef.current) return;
         // Clean up old connections
         dataConns.current = {};
         mediaCalls.current = {};
@@ -420,10 +342,12 @@ export default function App() {
         setPeers({});
         initPeer(); // re-init with stored peerIdRef
         // If monitor, re-connect to host after peer opens
-        if (!isHostRef.current && roomCode) {
+        const currentRoomCode = roomCodeRef.current;
+        if (!isHostRef.current && currentRoomCode) {
           const waitForOpen = () => {
+            if (stopRequestedRef.current) return;
             if (peerRef.current?.open) {
-              connectToPeer(`${PEER_PREFIX}${roomCode}`);
+              connectToPeer(`${PEER_PREFIX}${currentRoomCode}`);
             } else {
               setTimeout(waitForOpen, 500);
             }
@@ -433,7 +357,7 @@ export default function App() {
       }, delay);
       return attempt;
     });
-  }, [initPeer, connectToPeer, roomCode]);
+  }, [initPeer, connectToPeer]);
 
   const manualRetry = useCallback(() => {
     setReconnectAttempt(0);
@@ -443,6 +367,7 @@ export default function App() {
 
   // ── Camera mode ────────────────────────────────────────────
   const startCameraMode = async (existingCode, roomName) => {
+    stopRequestedRef.current = false;
     const displayName = roomName || 'Baby Camera';
     myNameRef.current = displayName;
     setRoomDisplayName(displayName);
@@ -470,27 +395,10 @@ export default function App() {
         analyserRef.current = analyser;
         sourceRef.current = source;
 
-        const dataArray = new Uint8Array(analyser.frequencyBinCount);
-        
-        const monitorAudio = () => {
-          if (!analyserRef.current) return;
-          analyserRef.current.getByteFrequencyData(dataArray);
-          
-          let sum = 0;
-          for(let i = 0; i < dataArray.length; i++) {
-            sum += dataArray[i];
-          }
-          const average = sum / dataArray.length;
-          // Scale average (0-255) to percentage (0-100)
-          const volumePercent = (average / 255) * 100;
+        if (audioCtx.state === 'suspended') {
+          await audioCtx.resume();
+        }
 
-          // Note: we can't easily access the latest state in requestAnimationFrame without refs,
-          // so we use a functional state update trick or just read from a ref, but to keep it simple,
-          // we'll dispatch an event or use a ref for the threshold if needed.
-          // Wait, cryThreshold is captured in closure? No, it's stale. 
-          // We will handle threshold in a useEffect that listens to cryThreshold instead, or update a ref.
-        };
-        // We'll actually start the loop below using a cleaner approach.
       } catch(err) {
         console.error('AudioContext setup failed', err);
       }
@@ -505,7 +413,7 @@ export default function App() {
           [code]: { name: displayName, createdAt: Date.now() }
         });
       }
-    } catch (err) {
+    } catch {
       setErrorMsg('Could not access camera/mic. Please grant permissions.');
       setStatus('error');
     }
@@ -587,6 +495,7 @@ export default function App() {
   };
 
   const connectToRoom = async () => {
+    stopRequestedRef.current = false;
     const code = inputCode.trim().toUpperCase();
     if (code.length < 4) { setErrorMsg('Enter a valid 4-character code.'); return; }
     setErrorMsg('');
@@ -618,7 +527,7 @@ export default function App() {
         setLocalStream(stream);
         setMicOn(true);
         callAllPeers(stream);
-      } catch (_) { alert('Cannot access microphone.'); }
+      } catch { alert('Cannot access microphone.'); }
     } else {
       const newVal = !micOn;
       localStream.getAudioTracks().forEach(t => { t.enabled = newVal; });
@@ -647,7 +556,7 @@ export default function App() {
           callAllPeers(localStream);
         }
         setCamOn(true);
-      } catch (_) { alert('Cannot access camera.'); }
+      } catch { alert('Cannot access camera.'); }
     } else {
       if (localStream) localStream.getVideoTracks().forEach(t => { t.enabled = false; t.stop(); });
       setCamOn(false);
@@ -656,6 +565,7 @@ export default function App() {
 
   // ── Cleanup ────────────────────────────────────────────────
   const stopEverything = async () => {
+    stopRequestedRef.current = true;
     if (audioLoopRef.current) clearInterval(audioLoopRef.current);
     if (audioContextRef.current) {
       audioContextRef.current.close().catch(()=>{});
@@ -680,6 +590,8 @@ export default function App() {
     setIsCrying(false); setBabyCrying(false);
   };
 
+  // Run the full teardown only when the app unmounts.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => () => { stopEverything(); }, []);
 
   // ─── RENDER ─────────────────────────────────────────────────
@@ -809,7 +721,7 @@ export default function App() {
     );
   }
 
-  if (mode === 'monitor' && status !== 'connected') {
+  if (mode === 'monitor' && !roomCode) {
     return (
       <div className="card" style={{ maxWidth: '400px' }}>
         <MonitorSmartphone className="icon-large" />
@@ -834,7 +746,7 @@ export default function App() {
   }
 
   if (mode === 'camera') {
-    const parentPeers = allPeerList.filter(([_, d]) => d.stream);
+    const parentPeers = allPeerList.filter(([, d]) => d.stream);
     return (
       <div className="card app-container">
         <div className="header-bar">
@@ -890,8 +802,8 @@ export default function App() {
     );
   }
 
-  const hostPeerEntry = allPeerList.find(([_, d]) => d.isHost && d.stream);
-  const otherParentPeers = allPeerList.filter(([_, d]) => !d.isHost && d.stream);
+  const hostPeerEntry = allPeerList.find(([, d]) => d.isHost && d.stream);
+  const otherParentPeers = allPeerList.filter(([, d]) => !d.isHost && d.stream);
 
   return (
     <div className="card app-container">

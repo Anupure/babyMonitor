@@ -8,14 +8,14 @@ import {
 } from "firebase/auth";
 
 const firebaseConfig = {
-  apiKey: "AIzaSyBXsTPyfCOBTxBYAV6psyI3pn8UUcO1YRo",
-  authDomain: "babymonitor-85946.firebaseapp.com",
-  databaseURL: "https://babymonitor-85946-default-rtdb.asia-southeast1.firebasedatabase.app",
-  projectId: "babymonitor-85946",
-  storageBucket: "babymonitor-85946.firebasestorage.app",
-  messagingSenderId: "722437897762",
-  appId: "1:722437897762:web:2b80a2997b186ac94dd47b",
-  measurementId: "G-30Q7Q0CQ2B"
+  apiKey: import.meta.env.VITE_FIREBASE_API_KEY || "AIzaSyBXsTPyfCOBTxBYAV6psyI3pn8UUcO1YRo",
+  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN || "babymonitor-85946.firebaseapp.com",
+  databaseURL: import.meta.env.VITE_FIREBASE_DATABASE_URL || "https://babymonitor-85946-default-rtdb.asia-southeast1.firebasedatabase.app",
+  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID || "babymonitor-85946",
+  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET || "babymonitor-85946.firebasestorage.app",
+  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID || "722437897762",
+  appId: import.meta.env.VITE_FIREBASE_APP_ID || "1:722437897762:web:2b80a2997b186ac94dd47b",
+  measurementId: import.meta.env.VITE_FIREBASE_MEASUREMENT_ID || "G-30Q7Q0CQ2B"
 };
 
 const app = initializeApp(firebaseConfig);
