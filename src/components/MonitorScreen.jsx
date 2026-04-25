@@ -1,5 +1,4 @@
 import React, { useState, useEffect } from 'react';
-import { PhoneOff } from 'lucide-react';
 import VideoPlayer from '../VideoPlayer';
 import ChatPanel from '../ChatPanel';
 
@@ -57,7 +56,7 @@ export default function MonitorScreen({
           </button>
         </div>
         <button className="btn-danger" onClick={stopEverything} style={{ padding: '0.5rem 1rem' }}>
-          <PhoneOff size={16} color="white" /> Leave
+          <span className="material-symbols-outlined" style={{ color: 'white', fontSize: '18px' }}>call_end</span> Leave
         </button>
       </div>
       

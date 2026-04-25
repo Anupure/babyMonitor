@@ -1,5 +1,4 @@
 import { useEffect, useRef, useState } from 'react';
-import { Maximize2, Volume2, VolumeX } from 'lucide-react';
 
 export default function VideoPlayer({ stream, isLocal, label, initiallyMuted, nightVision }) {
   const videoRef = useRef(null);
@@ -42,11 +41,11 @@ export default function VideoPlayer({ stream, isLocal, label, initiallyMuted, ni
         <div className="video-actions">
           {!isLocal && (
             <button className="icon-btn" onClick={() => setMuted((value) => !value)} title={muted ? 'Unmute' : 'Mute'}>
-              {muted ? <VolumeX size={16} /> : <Volume2 size={16} />}
+              <span className="material-symbols-outlined" style={{ fontSize: '20px' }}>{muted ? 'volume_off' : 'volume_up'}</span>
             </button>
           )}
           <button className="icon-btn" onClick={toggleFullscreen} title="Fullscreen">
-            <Maximize2 size={16} />
+            <span className="material-symbols-outlined" style={{ fontSize: '20px' }}>fullscreen</span>
           </button>
         </div>
       </div>

@@ -1,5 +1,4 @@
 import React, { useState, useEffect } from 'react';
-import { Baby, LogOut, Plus, Trash2, MonitorSmartphone } from 'lucide-react';
 import { ref, onValue } from 'firebase/database';
 import { database } from '../firebase';
 
@@ -47,7 +46,7 @@ export default function LandingScreen({
 
   return (
     <div className="card">
-      <Baby className="icon-large" />
+      <span className="material-symbols-outlined icon-large" style={{ fontSize: '64px' }}>child_care</span>
       <h1>Baby Monitor</h1>
       <p className="muted-text">Secure, peer-to-peer baby monitoring.</p>
 
@@ -56,12 +55,12 @@ export default function LandingScreen({
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%', marginBottom: '0.5rem' }}>
             <span className="muted-text" style={{ fontSize: '0.85rem' }}>👋 {user.displayName}</span>
             <button onClick={signOut} className="icon-btn" title="Sign Out" style={{ padding: '0.4rem' }}>
-              <LogOut size={16} color="#94a3b8" />
+              <span className="material-symbols-outlined" style={{ fontSize: '18px', color: '#94a3b8' }}>logout</span>
             </button>
           </div>
 
           <button className="btn-primary" onClick={onGoToCreateMode}>
-            <Plus size={20} color="white" /> New Baby Camera
+            <span className="material-symbols-outlined">add</span> New Baby Camera
           </button>
 
           {savedRooms.length > 0 && (
@@ -72,9 +71,9 @@ export default function LandingScreen({
                 return (
                   <div key={r.code} style={{ display: 'flex', gap: '0.5rem', width: '100%', marginBottom: '0.5rem' }}>
                     {isActive ? (
-                      <button className="btn-secondary" onClick={() => onJoinSavedRoom(r.code)} style={{ flex: 1, justifyContent: 'space-between', backgroundColor: 'rgba(59, 130, 246, 0.1)', borderColor: 'var(--primary-color)' }}>
-                        <span style={{ color: 'var(--primary-color)' }}>📱 Join as Parent</span>
-                        <span style={{ fontFamily: 'monospace', fontSize: '0.85rem', opacity: 0.8, color: 'var(--primary-color)' }}>{r.name || 'Baby Camera'} (Active)</span>
+                      <button className="btn-secondary" style={{ flex: 1, justifyContent: 'space-between', opacity: 0.5, cursor: 'not-allowed' }} disabled>
+                        <span>📷 {r.name || 'Baby Camera'}</span>
+                        <span style={{ fontFamily: 'monospace', fontSize: '0.85rem' }}>Active Elsewhere</span>
                       </button>
                     ) : (
                       <button className="btn-secondary" onClick={() => onStartCameraMode(r.code, r.name)} style={{ flex: 1, justifyContent: 'space-between' }}>
@@ -83,7 +82,7 @@ export default function LandingScreen({
                       </button>
                     )}
                     <button className="icon-btn" onClick={(e) => { e.stopPropagation(); onDeleteRoom(r.code); }} title="Delete room" style={{ padding: '0.5rem', flexShrink: 0 }}>
-                      <Trash2 size={14} color="#ef4444" />
+                      <span className="material-symbols-outlined" style={{ fontSize: '16px', color: '#ef4444' }}>delete</span>
                     </button>
                   </div>
                 );
@@ -93,7 +92,7 @@ export default function LandingScreen({
 
           <hr style={{ width: '100%', borderColor: 'var(--surface-hover)', margin: '1.25rem 0' }} />
           <button className="btn-secondary" onClick={onGoToMonitorMode}>
-            <MonitorSmartphone size={20} color="#94a3b8" /> Join as Monitor (Parent)
+            <span className="material-symbols-outlined" style={{ color: '#94a3b8' }}>devices</span> Join as Monitor (Parent)
           </button>
           {errorMsg && <p style={{ color: 'var(--error-color)', marginTop: '0.5rem' }}>{errorMsg}</p>}
         </div>
@@ -113,7 +112,7 @@ export default function LandingScreen({
             style={{ textTransform: 'none', letterSpacing: 'normal' }}
           />
           <button className="btn-secondary" onClick={onGoToMonitorMode}>
-            <MonitorSmartphone size={20} color="#94a3b8" /> Join Room as Guest
+            <span className="material-symbols-outlined" style={{ color: '#94a3b8' }}>devices</span> Join Room as Guest
           </button>
           {errorMsg && <p style={{ color: 'var(--error-color)', marginTop: '0.5rem' }}>{errorMsg}</p>}
 
