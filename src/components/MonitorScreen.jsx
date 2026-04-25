@@ -64,7 +64,7 @@ export default function MonitorScreen({
       {notificationState !== 'granted' && (
         <div className="warning-banner">
           <div>
-            <strong>Warning:</strong> Notifications are {notificationState === 'unsupported' ? 'not supported' : 'disabled'} on this device. You won't receive background alerts if the baby cries.
+            <strong>Warning:</strong> Notifications are {notificationState === 'unsupported' ? 'not supported in your browser. On iPhone, tap Share and "Add to Home Screen" to enable alerts.' : 'disabled on this device. You won't receive background alerts if the baby cries.'}
           </div>
           {notificationState === 'default' && (
             <button className="btn-primary" onClick={requestNotification} style={{ padding: '0.4rem 1rem', fontSize: '0.85rem', marginLeft: '1rem', whiteSpace: 'nowrap' }}>

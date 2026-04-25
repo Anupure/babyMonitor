@@ -248,6 +248,14 @@ export default function App() {
         signOut={signOut}
         savedRooms={savedRooms}
         onStartCameraMode={startCameraMode}
+        onJoinSavedRoom={async (code) => {
+           setAppError('');
+           setMode('monitor');
+           setInputCode(code);
+           setRoomCode(code);
+           await initFirebase(code, userName.trim(), false, handleRoomDisconnect);
+           initPeer(code, false, userName.trim(), localStream);
+        }}
         onDeleteRoom={(code) => user && deleteRoom(user.uid, code)}
         onGoToCreateMode={() => setMode('create')}
         onGoToMonitorMode={goToMonitor}
