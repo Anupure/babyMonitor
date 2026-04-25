@@ -81,7 +81,13 @@ export default function LandingScreen({
                         <span style={{ fontFamily: 'monospace', fontSize: '0.85rem', opacity: 0.6 }}>{r.code}</span>
                       </button>
                     )}
-                    <button className="icon-btn" onClick={(e) => { e.stopPropagation(); onDeleteRoom(r.code); }} title="Delete room" style={{ padding: '0.5rem', flexShrink: 0 }}>
+                    <button
+                      className="icon-btn"
+                      onClick={(e) => { e.stopPropagation(); onDeleteRoom(r.code); }}
+                      title={isActive ? 'Cannot delete while room is active' : 'Delete room'}
+                      disabled={isActive}
+                      style={{ padding: '0.5rem', flexShrink: 0, opacity: isActive ? 0.3 : 1, cursor: isActive ? 'not-allowed' : 'pointer' }}
+                    >
                       <span className="material-symbols-outlined" style={{ fontSize: '16px', color: '#ef4444' }}>delete</span>
                     </button>
                   </div>
