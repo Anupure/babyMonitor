@@ -34,6 +34,12 @@ body {
   justify-content: center;
 }
 
+@media (max-width: 768px) {
+  #root {
+    padding: 0;
+  }
+}
+
 button {
   border: none;
   border-radius: 12px;
@@ -165,6 +171,12 @@ video {
   background-color: rgba(59, 130, 246, 0.1);
   color: var(--primary-color);
   margin-bottom: 1.5rem;
+  text-align: center;
+  white-space: nowrap;
+}
+
+.header-bar .badge {
+  margin-bottom: 0;
 }
 
 .pulsing-dot {
@@ -359,6 +371,10 @@ video {
 .icon-btn svg {
   color: white !important;
   stroke: white !important;
+  width: 100%;
+  height: 100%;
+  max-width: 20px;
+  max-height: 20px;
 }
 
 .icon-btn:hover {
@@ -466,12 +482,67 @@ video {
 }
 
 @media (max-width: 768px) {
+  .card {
+    padding: 1rem 0.5rem;
+    border-radius: 0;
+  }
+  .app-container {
+    height: 100dvh;
+    width: 100vw;
+    padding: 0.5rem;
+  }
+  .header-bar {
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    justify-content: center;
+    padding-bottom: 0.5rem;
+  }
+  .badge {
+    padding: 0.4rem 0.8rem;
+    font-size: 0.8rem;
+  }
   .main-content {
     flex-direction: column;
+    gap: 0.5rem;
   }
   .chat-section {
-    min-height: 150px;
-    max-height: 200px;
+    min-height: 120px;
+    max-height: 160px;
+  }
+  .btn-danger {
+    padding: 0.4rem 0.8rem !important;
+    font-size: 0.85rem !important;
+  }
+  .icon-btn {
+    width: 36px;
+    height: 36px;
+  }
+}
+
+.warning-banner {
+  background-color: #fff3cd;
+  color: #856404;
+  padding: 0.6rem 1rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 0.85rem;
+  border-bottom: 1px solid #ffeeba;
+  border-radius: 8px;
+  margin-bottom: 0.5rem;
+}
+
+@media (max-width: 768px) {
+  .warning-banner {
+    flex-direction: column;
+    gap: 0.5rem;
+    text-align: center;
+    font-size: 0.75rem;
+    padding: 0.5rem;
+  }
+  .warning-banner button {
+    width: 100%;
+    margin-left: 0 !important;
   }
 }
 

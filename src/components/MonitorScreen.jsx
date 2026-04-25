@@ -62,12 +62,12 @@ export default function MonitorScreen({
       </div>
       
       {notificationState !== 'granted' && (
-        <div style={{ backgroundColor: '#fff3cd', color: '#856404', padding: '0.75rem 1rem', display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: '0.9rem', borderBottom: '1px solid #ffeeba' }}>
+        <div className="warning-banner">
           <div>
             <strong>Warning:</strong> Notifications are {notificationState === 'unsupported' ? 'not supported' : 'disabled'} on this device. You won't receive background alerts if the baby cries.
           </div>
           {notificationState === 'default' && (
-            <button className="btn-primary" onClick={requestNotification} style={{ padding: '0.3rem 0.8rem', fontSize: '0.8rem', marginLeft: '1rem', whiteSpace: 'nowrap' }}>
+            <button className="btn-primary" onClick={requestNotification} style={{ padding: '0.4rem 1rem', fontSize: '0.85rem', marginLeft: '1rem', whiteSpace: 'nowrap' }}>
               Enable Alerts
             </button>
           )}
