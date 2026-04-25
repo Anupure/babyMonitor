@@ -2,8 +2,13 @@ import { useState, useCallback, useRef } from 'react';
 import { ref, set, onValue, onDisconnect, push, remove, update } from 'firebase/database';
 import { database, ensureAuthenticated } from '../firebase';
 
+// Unique ID for this browser tab/session — survives re-renders but is new every page load
+const SESSION_ID = Math.random().toString(36).slice(2, 10);
+
 export function useFirebaseRoom() {
   const [chatMessages, setChatMessages] = useState([]);
+  // Store the full presence key (uid_sessionId) so cleanup only removes this session
+  const myPresenceKeyRef = useRef(null);
   const myFbUidRef = useRef(null);
   const fbUnsubsRef = useRef([]);
 
@@ -13,8 +18,13 @@ export function useFirebaseRoom() {
       const uid = user.uid;
       myFbUidRef.current = uid;
 
-      const myPresenceRef = ref(database, `rooms/${code}/presence/${uid}`);
-      await set(myPresenceRef, { name, isHost, ts: Date.now() });
+      // Each device session gets its own unique key: uid_sessionId
+      // This prevents two tabs/devices on the same account from overwriting each other
+      const presenceKey = `${uid}_${SESSION_ID}`;
+      myPresenceKeyRef.current = presenceKey;
+
+      const myPresenceRef = ref(database, `rooms/${code}/presence/${presenceKey}`);
+      await set(myPresenceRef, { name, isHost, uid, ts: Date.now() });
       await onDisconnect(myPresenceRef).remove();
 
       const chatRef = ref(database, `rooms/${code}/chat`);
@@ -55,9 +65,11 @@ export function useFirebaseRoom() {
   const cleanupFirebase = useCallback(async (roomCode) => {
     fbUnsubsRef.current.forEach(fn => { try { fn(); } catch { } });
     fbUnsubsRef.current = [];
-    if (myFbUidRef.current && roomCode) {
-      await remove(ref(database, `rooms/${roomCode}/presence/${myFbUidRef.current}`)).catch(() => {});
+    // Only remove THIS session's own presence entry — never touches other devices' entries
+    if (myPresenceKeyRef.current && roomCode) {
+      await remove(ref(database, `rooms/${roomCode}/presence/${myPresenceKeyRef.current}`)).catch(() => {});
     }
+    myPresenceKeyRef.current = null;
     myFbUidRef.current = null;
     setChatMessages([]);
   }, []);
